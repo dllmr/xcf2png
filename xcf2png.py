@@ -14,9 +14,13 @@ flattening visible layers while preserving transparency.
 import argparse
 import glob
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
+
+
+XCF_MAGIC = b'gimp xcf '
 
 
 def check_imagemagick() -> bool:
@@ -29,21 +33,53 @@ def check_imagemagick() -> bool:
     return shutil.which('magick') is not None
 
 
-def flatten_xcf_to_png(xcf_path: Path, png_path: Path) -> bool:
+def read_xcf_canvas_size(xcf_path: Path) -> tuple[int, int]:
+    """
+    Read the canvas dimensions from an XCF file header.
+
+    ImageMagick discards the XCF canvas size when loading layers, so it must
+    be read directly from the header: a 14-byte signature ("gimp xcf " plus a
+    version tag and NUL) followed by width and height as big-endian uint32s.
+
+    Args:
+        xcf_path: Path to the XCF file
+
+    Returns:
+        Tuple of (width, height)
+
+    Raises:
+        ValueError: If the file is not a valid XCF file
+    """
+    with open(xcf_path, 'rb') as f:
+        header = f.read(22)
+
+    if len(header) < 22 or not header.startswith(XCF_MAGIC):
+        raise ValueError(f"'{xcf_path}' is not a GIMP XCF file")
+
+    return struct.unpack('>II', header[14:22])
+
+
+def flatten_xcf_to_png(xcf_path: Path, png_path: Path, width: int, height: int) -> bool:
     """
     Convert an XCF file to PNG using ImageMagick.
 
     Args:
         xcf_path: Path to the input XCF file
         png_path: Path to the output PNG file
+        width: Canvas width of the XCF image
+        height: Canvas height of the XCF image
 
     Returns:
         True if conversion was successful, False otherwise
     """
     try:
-        # Run ImageMagick conversion
+        # Run ImageMagick conversion. Setting the canvas size with -repage
+        # (which keeps layer offsets) makes -flatten clip layers to the image
+        # bounds; otherwise the output takes the size of the bottom layer.
+        # -background none keeps uncovered areas transparent instead of white.
         result = subprocess.run(
-            ['magick', str(xcf_path), '-flatten', str(png_path)],
+            ['magick', str(xcf_path), '-background', 'none',
+             '-repage', f'{width}x{height}', '-flatten', str(png_path)],
             capture_output=True,
             text=True,
             check=True
@@ -70,6 +106,14 @@ def convert_xcf_to_png(xcf_path: Path, overwrite: bool = False) -> tuple[bool, b
         - success: True if conversion was successful
         - overwrite_all: True if user chose to overwrite all remaining files
     """
+    # Validate the input before prompting about the output
+    try:
+        width, height = read_xcf_canvas_size(xcf_path)
+    except (OSError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        print(f"Failed to convert {xcf_path}", file=sys.stderr)
+        return False, False
+
     # Generate output path
     png_path = xcf_path.with_suffix('.png')
 
@@ -91,7 +135,7 @@ def convert_xcf_to_png(xcf_path: Path, overwrite: bool = False) -> tuple[bool, b
     print(f"Converting {xcf_path} to {png_path}...")
 
     # Convert XCF to PNG using ImageMagick
-    success = flatten_xcf_to_png(xcf_path, png_path)
+    success = flatten_xcf_to_png(xcf_path, png_path, width, height)
 
     if success:
         print(f"Successfully converted {xcf_path} to {png_path}")

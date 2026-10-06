@@ -40,12 +40,14 @@ The script uses PEP 723 inline dependencies, so you can run it directly with `uv
 
 The script:
 1. Checks that ImageMagick is installed and available
-2. Calls ImageMagick's `magick` command with the `-flatten` option to convert XCF to PNG
-3. ImageMagick handles reading the XCF format, processing visible layers, and compositing them
-4. Saves the flattened result as a PNG file with the same base filename
+2. Reads the canvas size from the XCF file header (rejecting files that aren't XCF)
+3. Calls ImageMagick's `magick` command with `-background none -repage WxH -flatten` to convert XCF to PNG
+4. ImageMagick handles reading the XCF format, processing visible layers, and compositing them onto a transparent canvas of the original image size
+5. Saves the flattened result as a PNG file with the same base filename
 
 ## Notes
 
 - ImageMagick must be installed separately - the script will exit with a helpful error message if it's not found
 - ImageMagick natively supports the XCF format and handles layer flattening automatically
+- ImageMagick does not preserve the XCF canvas size when loading layers, so the script reads it from the file header. Layers that extend beyond the image bounds are clipped, and layers entirely outside it are ignored, matching GIMP's own export
 - All visible layers are flattened while maintaining proper alpha channel transparency
